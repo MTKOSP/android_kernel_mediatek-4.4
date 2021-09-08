@@ -216,10 +216,21 @@ static void part_release(struct device *dev)
 	kfree(p);
 }
 
+static int part_uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+	struct hd_struct *part = dev_to_part(dev);
+
+	add_uevent_var(env, "PARTN=%u", part->partno);
+	if (part->info && part->info->volname[0])
+		add_uevent_var(env, "PARTNAME=%s", part->info->volname);
+	return 0;
+}
+
 struct device_type part_type = {
 	.name		= "partition",
 	.groups		= part_attr_groups,
 	.release	= part_release,
+	.uevent		= part_uevent,
 };
 
 static void delete_partition_rcu_cb(struct rcu_head *head)
@@ -332,6 +343,24 @@ struct hd_struct *add_partition(struct gendisk *disk, int partno,
 	if (err)
 		goto out_free_info;
 	pdev->devt = devt;
+
+	if (!p->policy) {
+		if (disk->fops->check_disk_range_wp) {
+			/*
+			 * Check if the disk range is write protected.
+			 * return value:
+			 *   0: NO WP
+			 *   1: PARTIALLY WP
+			 *   2: FULLY WP
+			 *   < 0: error
+			 */
+			err = disk->fops->check_disk_range_wp(disk, start, len);
+			if (err > 0)
+				p->policy = 1;
+			else if (err < 0)
+				goto out_free_info;
+		}
+	}
 
 	/* delay uevent until 'holders' subdir is created */
 	dev_set_uevent_suppress(pdev, 1);
